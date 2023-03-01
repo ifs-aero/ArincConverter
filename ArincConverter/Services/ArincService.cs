@@ -10,16 +10,18 @@ namespace ArincConverter.Services
     public class ArincService : IArincService
     {
         private readonly IPdfService _pdfService;
+        private User _user;
 
         public ArincService(IPdfService pdfService)
         {
             _pdfService = pdfService;
         }
 
-        public FlightPlan GetFlightPlan(byte[] flightPlanData)
+        public FlightPlan GetFlightPlan(byte[] flightPlanData, User user)
         {
             var flightPlan = new FlightPlan();
             ZipFile unzippedDatFolder = null;
+            _user = user;
 
             using (Stream stream = new MemoryStream(flightPlanData))
             {
@@ -86,29 +88,30 @@ namespace ArincConverter.Services
             var callSign = arincPlan.FlightInfo?.ATCCallsign;
             var dep = arincPlan.M633SupplementaryHeader?.Flight?.DepartureAirport?.AirportICAOCode;
             var arr = arincPlan.M633SupplementaryHeader?.Flight?.ArrivalAirport?.AirportICAOCode;
-            var flightLogId = callSign != nameof(flightIdentification)
-                    ? $"{flightIdentification}({callSign})-{dep}-{arr}"
-                    : $"{flightIdentification}-{dep}-{arr}";
-            var airline = arincPlan.M633SupplementaryHeader?.Flight?.FlightIdentification?.FlightNumber?.AirlineIATACode;
             var flightNumber = arincPlan.M633SupplementaryHeader?.Flight?.FlightIdentification?.FlightNumber?.Number;
+            var flightLogId = callSign != nameof(flightIdentification)
+                    ? $"{flightIdentification}-{flightNumber}-({callSign})-{dep}-{arr}"
+                    : $"{flightIdentification}-{flightNumber}-{dep}-{arr}";
+            var airline = arincPlan.M633SupplementaryHeader?.Flight?.FlightIdentification?.FlightNumber?.AirlineIATACode;
             var std = arincPlan.M633SupplementaryHeader?.Flight?.ScheduledTimeOfDeparture?.ToUniversalTime(DateTimeFormat.Default);
-            var altFuel = arincPlan.FuelHeader?.AlternateFuels?.AlternateFuel?.Any() ?? false
-                    ? Convert.ToDouble(arincPlan.FuelHeader?.AlternateFuels?.AlternateFuel?[0]?.EstimatedWeight?.Value?.Text)
-                    : 0;
-            var alt2Fuel = arincPlan.FuelHeader?.AlternateFuels?.AlternateFuel?.Count > 1
-                    ? Convert.ToDouble(arincPlan.FuelHeader?.AlternateFuels?.AlternateFuel?[1]?.EstimatedWeight?.Value?.Text)
-                    : 0;
-            var alt3Fuel = arincPlan.FuelHeader?.AlternateFuels?.AlternateFuel?.Count > 2
-                    ? Convert.ToDouble(arincPlan.FuelHeader?.AlternateFuels?.AlternateFuel?[2]?.EstimatedWeight?.Value?.Text)
-                    : 0;
-            var alt4Fuel = arincPlan.FuelHeader?.AlternateFuels?.AlternateFuel?.Count > 3
-                    ? Convert.ToDouble(arincPlan.FuelHeader?.AlternateFuels?.AlternateFuel?[3]?.EstimatedWeight?.Value?.Text)
-                    : 0;
+            var primaryAlternateFuel = arincPlan.FuelHeader?.AlternateFuels?.AlternateFuel?.ElementAtOrDefault(0);
+            var altFuel = Convert.ToDouble(primaryAlternateFuel?.EstimatedWeight?.Value?.Text);
+            var alt2Fuel = Convert.ToDouble(arincPlan.FuelHeader?.AlternateFuels?.AlternateFuel?.ElementAtOrDefault(1)?.EstimatedWeight?.Value?.Text);
+            var alt3Fuel = Convert.ToDouble(arincPlan.FuelHeader?.AlternateFuels?.AlternateFuel?.ElementAtOrDefault(2)?.EstimatedWeight?.Value?.Text);
+            var alt4Fuel = Convert.ToDouble(arincPlan.FuelHeader?.AlternateFuels?.AlternateFuel?.ElementAtOrDefault(3)?.EstimatedWeight?.Value?.Text);
+            var remarks = arincPlan.Remarks?.Remark?.FirstOrDefault(x => x.RemarkType == "general")?.Paragraph?.Text;
+            var extraFuel = (Airline)_user.AirlineId == Airline.EnterAir
+                ? (arincPlan.FuelHeader?.AdditionalFuels?.AdditionalFuel?.Sum(x => Convert.ToDouble(x.EstimatedWeight?.Value?.Text))
+                    + arincPlan.FuelHeader?.ExtraFuels?.ExtraFuel?.Sum(x => Convert.ToDouble(x.EstimatedWeight?.Value?.Text))) ?? 0
+                : arincPlan.FuelHeader?.ExtraFuels?.ExtraFuel?.Sum(x => Convert.ToDouble(x.EstimatedWeight?.Value?.Text)) ?? 0;
+
             var flightId = Guid.NewGuid().ToString();
 
             flightPlan = new FlightPlan
             {
-                ThirdPartyPlanId = flightId,
+                AirlineId = _user.AirlineId,
+                Remarks = remarks,
+                ThirdPartyPlanId = arincPlan.FlightPlanId,
                 ThirdPartyScheduleId = flightId,
                 FlightLogId = flightLogId,
                 CommercialFlightNumber = flightIdentification,
@@ -119,7 +122,7 @@ namespace ArincConverter.Services
                 TaxiFuel = Convert.ToDouble(arincPlan.FuelHeader?.TaxiFuel?.EstimatedWeight?.Value?.Text),
                 TripFuel = Convert.ToDouble(arincPlan.FuelHeader?.TripFuel?.EstimatedWeight?.Value?.Text),
                 ContingencyFuel = Convert.ToDouble(arincPlan.FuelHeader?.ContingencyFuel?.EstimatedWeight?.Value?.Text),
-                FinalReserveFuel = Convert.ToDouble(arincPlan.FuelHeader?.FinalReserve?.EstimatedWeight?.Value?.Text),
+                FinalReserveFuel = Convert.ToDouble(arincPlan.FuelHeader?.FinalReserve?.EstimatedWeight?.Value?.Text ?? primaryAlternateFuel?.FinalReserve?.EstimatedWeight?.Value?.Text),
                 ETOPSFuel = Convert.ToDouble(arincPlan.FuelHeader?.ETOPSFuel?.EstimatedWeight?.Value?.Text),
                 ExtraFuel = arincPlan.FuelHeader?.ExtraFuels?.ExtraFuel?.Sum(x => Convert.ToDouble(x.EstimatedWeight?.Value?.Text)) ?? 0,
                 TakeOffFuel = Convert.ToDouble(arincPlan.FuelHeader?.TakeOffFuel?.EstimatedWeight?.Value?.Text),
@@ -243,7 +246,10 @@ namespace ArincConverter.Services
                 if (waypoints != null)
                 {
                     var hasTOC = waypoints.Waypoint?.Any(td => td.WaypointName == "TOC") ?? false;
-                    var extraFuelTotal = fp.FuelHeader?.ExtraFuels?.ExtraFuel?.Sum(x => Convert.ToDouble(x.EstimatedWeight?.Value?.Text)) ?? 0;
+                    var extraFuelTotal = (Airline)_user.AirlineId == Airline.EnterAir
+                        ? (fp.FuelHeader?.AdditionalFuels?.AdditionalFuel?.Sum(x => Convert.ToDouble(x.EstimatedWeight?.Value?.Text))
+                            + fp.FuelHeader?.ExtraFuels?.ExtraFuel?.Sum(x => Convert.ToDouble(x.EstimatedWeight?.Value?.Text))) ?? 0
+                        : fp.FuelHeader?.ExtraFuels?.ExtraFuel?.Sum(x => Convert.ToDouble(x.EstimatedWeight?.Value?.Text)) ?? 0;
                     var contingencyFuel = Convert.ToInt32(fp.FuelHeader?.ContingencyFuel?.EstimatedWeight?.Value?.Text);
                     var blockFuel = Convert.ToInt32(fp.FuelHeader?.BlockFuel?.EstimatedWeight?.Value?.Text);
                     var additionalFuel = fp.FuelHeader?.AdditionalFuels?.AdditionalFuel?.Sum(x => Convert.ToDouble(x.EstimatedWeight?.Value?.Text)) ?? 0;
@@ -267,7 +273,7 @@ namespace ArincConverter.Services
                         var segmentWindComponent = wp.SegmentWindComponent?.Value?.Text ?? wp.SegmentWind?.Component?.Value?.Text;
                         var windDirection = Convert.ToDouble(wp.SegmentWind?.Direction?.Value?.Text);
                         var windSpeed = Convert.ToDouble(wp.SegmentWind?.Speed?.Value?.Text);
-                        var WindShear = 0;
+                        var windShear = 0;
                         var isa = Convert.ToDouble(wp.SegmentISADeviation?.Value?.Text);
                         var magCourse = (int)Math.Round(Convert.ToDouble(wp.Tracks?.OutboundTrack?.FirstOrDefault(x => x.Value?.Type?.ToLower() == "magnetic")?.Value?.Text), MidpointRounding.AwayFromZero);
                         var trueCourse = (int)Math.Round(Convert.ToDouble(wp.Tracks?.OutboundTrack?.FirstOrDefault(x => x.Value?.Type?.ToLower() == "true")?.Value?.Text), MidpointRounding.AwayFromZero);
@@ -317,7 +323,7 @@ namespace ArincConverter.Services
                             WindSpeed = windSpeed,
                             ISADeviation = isa,
                             LegTime = legTime,
-                            WindShear = WindShear,
+                            WindShear = windShear,
                             LegDistance = Math.Round(Convert.ToDouble(wp.GroundDistance?.Value?.Text), 0),
                             FuelUsed = accumulatedBurnOff,
                             Variation = variation,
@@ -482,32 +488,6 @@ namespace ArincConverter.Services
             return notamsList;
         }
 
-        private LocationType GetNotamAirportLocationType(string airportFunction)
-        {
-
-            switch (airportFunction)
-            {
-                case Sabre.AlternateAirport.DepartureAirport:
-                    return LocationType.Departure;
-                case Sabre.AlternateAirport.ArrivalAirport:
-                    return LocationType.Arrival;
-                case Sabre.AlternateAirport.PrimaryArrivalAlternateAirport:
-                    return LocationType.ArrivalAlternatePrimary;
-                case Sabre.AlternateAirport.SecondaryArrivalAlternateAirport:
-                    return LocationType.ArrivalAlternateSecondary;
-                case Sabre.AlternateAirport.EnrouteAlternateAirport:
-                    return LocationType.EnrouteAlternate;
-                case Sabre.AlternateAirport.ContingencySavingAirport:
-                    return LocationType.ContingencySaving;
-                case Sabre.AlternateAirport.DepartureAlternateAirport:
-                    return LocationType.DepartureAlternate;
-                case Sabre.AlternateAirport.ETOPSAdequateAirport:
-                case Sabre.AlternateAirport.ETOPSAirport:
-                    return LocationType.ETOPS;
-            }
-            return LocationType.Departure;
-        }
-
         private FlightDocument GetFlightPlanDocument(ZipEntry file)
         {
             if (file == null)
@@ -520,7 +500,7 @@ namespace ArincConverter.Services
             return new FlightDocument
             {
                 Content = Convert.ToBase64String(fileStream.ToArray()),
-                Filename = $"FlightPlan_3002_{DateTime.UtcNow:HHmmss}.pdf",
+                Filename = $"FlightPlan_{_user.AirlineId}_{DateTime.UtcNow:HHmmss}.pdf",
                 ContentType = ContentType.Application.Pdf,
                 JourneyPart = Sabre.AlternateAirport.DepartureAirport
             };
@@ -538,7 +518,7 @@ namespace ArincConverter.Services
             return new FlightDocument
             {
                 Content = Convert.ToBase64String(fileStream.ToArray()),
-                Filename = $"FlightPlan_3002_{DateTime.UtcNow:HHmmss}.xml",
+                Filename = $"FlightPlan_{_user.AirlineId}_{DateTime.UtcNow:HHmmss}.xml",
                 ContentType = ContentType.Application.Xml,
                 JourneyPart = Sabre.AlternateAirport.DepartureAirport
             };
@@ -562,7 +542,7 @@ namespace ArincConverter.Services
             return new FlightDocument
             {
                 Content = _pdfService.TextToPdf("ATC", text),
-                Filename = $"ATC_3002_{DateTime.UtcNow:HHmmss}.pdf",
+                Filename = $"ATC_{_user.AirlineId}_{DateTime.UtcNow:HHmmss}.pdf",
                 ContentType = ContentType.Application.Pdf,
                 JourneyPart = Sabre.AlternateAirport.DepartureAirport
             };
@@ -631,7 +611,7 @@ namespace ArincConverter.Services
             return new FlightDocument
             {
                 Content = _pdfService.TextToPdf(dict),
-                Filename = $"NOTAM_3002_{DateTime.UtcNow:HHmmss}.pdf",
+                Filename = $"NOTAM_{_user.AirlineId}_{DateTime.UtcNow:HHmmss}.pdf",
                 ContentType = ContentType.Application.Pdf,
                 JourneyPart = Sabre.AlternateAirport.DepartureAirport
             };
@@ -750,7 +730,7 @@ namespace ArincConverter.Services
             return new FlightDocument
             {
                 Content = _pdfService.TextToPdf(weatherList),
-                Filename = $"WX_3002_{DateTime.UtcNow:HHmmss}.pdf",
+                Filename = $"WX_{_user.AirlineId}_{DateTime.UtcNow:HHmmss}.pdf",
                 ContentType = ContentType.Application.Pdf,
                 JourneyPart = Sabre.AlternateAirport.DepartureAirport
             };

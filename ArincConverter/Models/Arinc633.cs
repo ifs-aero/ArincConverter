@@ -101,6 +101,9 @@ namespace ArincConverter.Models
         [XmlElement(ElementName = "FlightInfo", Namespace = "http://aeec.aviation-ia.net/633")]
         public FlightInfo FlightInfo { get; set; }
 
+        [XmlElement(ElementName = "Remarks", Namespace = "http://aeec.aviation-ia.net/633")]
+        public RemarkList Remarks { get; set; }
+
         [XmlElement(ElementName = "FlightPlanHeader", Namespace = "http://aeec.aviation-ia.net/633")]
         public FlightPlanHeader FlightPlanHeader { get; set; }
 

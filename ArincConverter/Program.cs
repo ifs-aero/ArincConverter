@@ -4,6 +4,7 @@ using ArincConverter.Models;
 using ArincConverter.Services;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using System.IdentityModel.Tokens.Jwt;
 using System.Security;
 
 using IHost host = Host.CreateDefaultBuilder(args)
@@ -23,14 +24,34 @@ static async Task RunServiceAsync(IServiceProvider hostProvider)
 {
     try
     {
-        FlightPlan? flightPlan = RunArinc(hostProvider);
-        if (flightPlan != null)
+        Console.WriteLine("\nSelect the environment:\n1) Development\n2) Test\n");
+        var service = Console.ReadLine();
+        if (service.IsNotNullOrEmpty())
         {
-            await PushFlight(hostProvider, flightPlan);
+            var environment = service.ToLower() switch
+            {
+                "1" or "development" or "dev" => "https://api-dev.ifs.aero/api",
+                "2" or "test" => "https://api-test.ifs.aero/api",
+                _ => throw new Exception("Invalid environment"),
+            };
+
+            IEfbApiService efb = GetService<IEfbApiService>(hostProvider);
+
+            var token = await efb.Login(BuildLoginRequest(), environment);
+
+            FlightPlan? flightPlan = RunArinc(hostProvider, GetUser(token));
+            if (flightPlan != null)
+            {
+                await PushFlight(hostProvider, efb, flightPlan, token, environment);
+            }
+            else
+            {
+                Console.WriteLine("\nAn error occurred while converting the files to a flight plan.");
+            }
         }
         else
         {
-            Console.WriteLine("\nAn error occurred while converting the files to a flight plan.");
+            throw new Exception("Invalid environment");
         }
 
         Console.WriteLine("\nPress any key to exit.");
@@ -43,7 +64,7 @@ static async Task RunServiceAsync(IServiceProvider hostProvider)
     }
 }
 
-static FlightPlan RunArinc(IServiceProvider hostProvider)
+static FlightPlan RunArinc(IServiceProvider hostProvider, User user)
 {
     Console.WriteLine("\nIntroduce the path of the Arinc xml files:");
     var filePath = Console.ReadLine();
@@ -53,7 +74,7 @@ static FlightPlan RunArinc(IServiceProvider hostProvider)
         IArincService arinc = GetService<IArincService>(hostProvider);
 
         Console.WriteLine("\nConverting...");
-        return arinc.GetFlightPlan(File.ReadAllBytes(filePath));
+        return arinc.GetFlightPlan(File.ReadAllBytes(filePath), user);
     }
     else
     {
@@ -61,29 +82,11 @@ static FlightPlan RunArinc(IServiceProvider hostProvider)
     }
 }
 
-static async Task PushFlight(IServiceProvider hostProvider, FlightPlan flightPlan)
+static async Task PushFlight(IServiceProvider hostProvider, IEfbApiService efb, FlightPlan flightPlan, string token, string environment)
 {
-    Console.WriteLine("\nSelect the environment:\n1) Development\n2) Test\n");
-    var service = Console.ReadLine();
-    if (service.IsNotNullOrEmpty())
-    {
-        var environment = service.ToLower() switch
-        {
-            "1" or "development" => "https://api-dev.ifs.aero/api",
-            "2" or "test" => "https://api-test.ifs.aero/api",
-            _ => throw new Exception("Invalid environment"),
-        };
+    var flightPlanId = await efb.PostFlightPlan(flightPlan, token, environment);
 
-        IEfbApiService efb = GetService<IEfbApiService>(hostProvider);
-        
-        var flightPlanId = await efb.PostFlightPlan(BuildLoginRequest(), flightPlan, environment);
-        
-        Console.WriteLine($"\nFlight plan was created successfully...\nId: {flightPlanId}\nFlightPlanId: {flightPlan.ThirdPartyPlanId}\nFlightScheduledId: {flightPlan.ThirdPartyScheduleId}\n\n");
-    }
-    else
-    {
-        throw new Exception("Invalid environment");
-    }
+    Console.WriteLine($"\nFlight plan was created successfully...\nId: {flightPlanId}\nFlightPlanId: {flightPlan.ThirdPartyPlanId}\nFlightScheduledId: {flightPlan.ThirdPartyScheduleId}\n\n");
 }
 
 static LoginRequest BuildLoginRequest()
@@ -146,4 +149,16 @@ static string GetPassword()
     }
 
     return new System.Net.NetworkCredential(string.Empty, pwd).Password;
+}
+
+static User GetUser(string jwt)
+{
+    var jwtHandler = new JwtSecurityTokenHandler();
+    var token = jwtHandler.ReadJwtToken(jwt);
+
+    var username = token.Claims.FirstOrDefault(c => c.Type == "unique_name")?.Value;
+    var airline = Convert.ToInt32(token.Claims.FirstOrDefault(c => c.Type == "AirlineId")?.Value);
+    var airlineName = token.Claims.FirstOrDefault(c => c.Type == "airlineName")?.Value;
+
+    return new User(airline, airlineName, username);
 }

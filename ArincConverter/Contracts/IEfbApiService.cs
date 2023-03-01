@@ -4,6 +4,7 @@ namespace ArincConverter.Contracts
 {
     public interface IEfbApiService
     {
-        Task<int> PostFlightPlan(LoginRequest request, FlightPlan flightPlan, string environment);
+        Task<string> Login(LoginRequest request, string environment);
+        Task<int> PostFlightPlan(FlightPlan flightPlan, string token, string environment);
     }
 }

@@ -2,7 +2,6 @@
 using ArincConverter.Helpers;
 using ArincConverter.Models;
 using Refit;
-using System.IdentityModel.Tokens.Jwt;
 using System.Text.RegularExpressions;
 
 namespace ArincConverter.Services
@@ -11,21 +10,20 @@ namespace ArincConverter.Services
     {
         private IEfbApi _efbApi;
 
-        private async Task<LoginResponse> Login(LoginRequest request, string environment, CancellationToken token)
-        {
-            InitRestClient(environment);
-            return await _efbApi.Login(request, token);
-        }
-
-        public async Task<int> PostFlightPlan(LoginRequest request, FlightPlan flightPlan, string environment)
+        public async Task<string> Login(LoginRequest request, string environment)
         {
             Console.WriteLine("\n\nAuthenticating...");
-            var loginResponse = await Login(request, environment, CancellationToken.None);
+            InitRestClient(environment);
 
-            InitRestClient(environment, loginResponse.Token);
+            var response = await _efbApi.Login(request, CancellationToken.None);
+            return response.Token;
+        }
+
+        public async Task<int> PostFlightPlan(FlightPlan flightPlan, string token, string environment)
+        {
+            InitRestClient(environment, token);
 
             Console.WriteLine("\nPosting flight plan...");
-            flightPlan.AirlineId = GetAirlineId(loginResponse.Token);
             var response = await _efbApi.PostFlightPlan(new[] { flightPlan });
             if (response.IsSuccessStatusCode)
             {
@@ -49,13 +47,6 @@ namespace ArincConverter.Services
                     BaseAddress = new Uri(url),
                     Timeout = TimeSpan.FromSeconds(45)
                 });
-        }
-
-        private int GetAirlineId(string token)
-        {
-            var jwtHandler = new JwtSecurityTokenHandler();
-            var jwt = jwtHandler.ReadJwtToken(token);
-            return Convert.ToInt32(jwt.Claims.FirstOrDefault(c => c.Type == "AirlineId")?.Value);
         }
     }
 }
