@@ -39,7 +39,7 @@ static async Task RunServiceAsync(IServiceProvider hostProvider)
 
             var token = await efb.Login(BuildLoginRequest(), environment);
 
-            FlightPlan? flightPlan = RunArinc(hostProvider, GetUser(token));
+            FlightPlan? flightPlan = ConvertArincFile(hostProvider, GetUser(token));
             if (flightPlan != null)
             {
                 await PushFlight(hostProvider, efb, flightPlan, token, environment);
@@ -64,7 +64,7 @@ static async Task RunServiceAsync(IServiceProvider hostProvider)
     }
 }
 
-static FlightPlan RunArinc(IServiceProvider hostProvider, User user)
+static FlightPlan ConvertArincFile(IServiceProvider hostProvider, User user)
 {
     Console.WriteLine("\nIntroduce the path of the Arinc xml files:");
     var filePath = Console.ReadLine();
