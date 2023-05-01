@@ -42,7 +42,7 @@ static async Task RunServiceAsync(IServiceProvider hostProvider)
             FlightPlan? flightPlan = ConvertArincFile(hostProvider, GetUser(token));
             if (flightPlan != null)
             {
-                await PushFlight(hostProvider, efb, flightPlan, token, environment);
+                await PostFlight(hostProvider, efb, flightPlan, token, environment);
             }
             else
             {
@@ -82,7 +82,7 @@ static FlightPlan ConvertArincFile(IServiceProvider hostProvider, User user)
     }
 }
 
-static async Task PushFlight(IServiceProvider hostProvider, IEfbApiService efb, FlightPlan flightPlan, string token, string environment)
+static async Task PostFlight(IServiceProvider hostProvider, IEfbApiService efb, FlightPlan flightPlan, string token, string environment)
 {
     var flightPlanId = await efb.PostFlightPlan(flightPlan, token, environment);
 

@@ -3,6 +3,7 @@ using Ionic.Zip;
 using ArincConverter.Contracts;
 using ArincConverter.Models;
 using ArincConverter.Helpers;
+using System.Text;
 using static ArincConverter.Helpers.Constants;
 
 namespace ArincConverter.Services
@@ -104,7 +105,6 @@ namespace ArincConverter.Services
                 ? (arincPlan.FuelHeader?.AdditionalFuels?.AdditionalFuel?.Sum(x => Convert.ToDouble(x.EstimatedWeight?.Value?.Text))
                     + arincPlan.FuelHeader?.ExtraFuels?.ExtraFuel?.Sum(x => Convert.ToDouble(x.EstimatedWeight?.Value?.Text))) ?? 0
                 : arincPlan.FuelHeader?.ExtraFuels?.ExtraFuel?.Sum(x => Convert.ToDouble(x.EstimatedWeight?.Value?.Text)) ?? 0;
-
             var flightId = Guid.NewGuid().ToString();
 
             flightPlan = new FlightPlan
@@ -433,7 +433,7 @@ namespace ArincConverter.Services
                     CCode = item.ICAONOTAMInformation?.ItemC,
                     DCode = item.ICAONOTAMInformation?.ItemD,
                     QCode = item.ICAONOTAMInformation?.QCode1 ?? item.ICAONOTAMInformation?.QCode2,
-                    NotamText = $"{item.ICAONOTAMInformation?.ItemD}{Environment.NewLine}{item.NOTAMText?.Paragraph?.Text}",
+                    NotamText = $"{item.Series}{item.Serial}/{item.Year} NOTAMN{Environment.NewLine}{item.NOTAMText?.Paragraph?.Text}",
                 };
             }
 
@@ -442,7 +442,7 @@ namespace ArincConverter.Services
                 Parallel.ForEach(fp.AirportDataList?.AirportData, (data) =>
                 {
                     var icao = data?.Airport?.AirportICAOCode;
-                    var relatedNotams = notams.NOTAMs?.NOTAM?.Where(x => x.Keys?.Airports?.Airport?.AirportICAOCode == icao && x.Source != Constants.Document.Type.Company).ToList();
+                    var relatedNotams = notams.NOTAMs?.NOTAM?.Where(x => x.Keys?.Airports?.Airport?.FirstOrDefault(a => a.AirportICAOCode == icao) != null && x.Source != Constants.Document.Type.Company).ToList();
                     var relatedAW = aw?.WeatherBulletins?.WeatherBulletin?.Where(x => x.Airport?.AirportICAOCode == icao).ToList();
                     var function = icao == departure
                                        ? Constants.Sabre.AlternateAirport.DepartureAirport
@@ -452,6 +452,13 @@ namespace ArincConverter.Services
 
                     foreach (var item in relatedAW)
                     {
+                        var weatherText = new StringBuilder();
+                        if (item.Observation?.ObservationText?.Paragraph?.FirstOrDefault()?.Text.IsNotNullOrEmpty() == true)
+                        {
+                            weatherText.AppendLine(item.Observation?.ObservationText?.Paragraph?.FirstOrDefault()?.Text);
+                        }
+                        weatherText.Append(item.Forecast?.ForecastText?.Paragraph?.FirstOrDefault()?.Text);
+
                         var newNotam = new Notam
                         {
                             Number = $"WEATHER",
@@ -459,7 +466,7 @@ namespace ArincConverter.Services
                             Year = item.Forecast != null ? DateTime.Parse(item.Forecast?.ForecastTime).ToString("yy") : DateTime.Parse(item.Observation?.ObservationTime).ToString("yy"),
                             FromDate = item.Forecast != null ? item.Forecast?.ForecastStartTime?.ToUniversalTime(DateTimeFormat.Default) : item.Observation?.ObservationTime?.ToUniversalTime(DateTimeFormat.Default),
                             ToDate = item.Forecast != null ? item.Forecast?.ForecastEndTime?.ToUniversalTime(DateTimeFormat.Default) : item.Observation?.ObservationTime?.ToUniversalTime(DateTimeFormat.Default),
-                            NotamText = $"WEATHER{Environment.NewLine}{Environment.NewLine}{item.Observation?.ObservationText?.Paragraph?.FirstOrDefault()?.Text}{Environment.NewLine}{item.Forecast?.ForecastText?.Paragraph?.FirstOrDefault().Text}",
+                            NotamText = $"WEATHER{Environment.NewLine}{weatherText}",
                             LocationType = GetLocation(function)
                         };
 
@@ -475,13 +482,13 @@ namespace ArincConverter.Services
                 var firNotams = notams.NOTAMs?.NOTAM?.Where(x => x.NOTAMSubjects?.NOTAMSubject == "Airspace").ToList();
                 foreach (var item in firNotams)
                 {
-                    notamsList.Add(CreateNotam(item, Constants.Sabre.AlternateAirport.FlightInformationRegion, item.Keys?.Airspaces?.Airspace?.AirspaceICAOCode));
+                    notamsList.Add(CreateNotam(item, Constants.Sabre.AlternateAirport.FlightInformationRegion, item.Keys?.Airspaces?.Airspace?.FirstOrDefault()?.AirspaceICAOCode));
                 }
 
                 var companyNotams = notams.NOTAMs?.NOTAM?.Where(x => x.Source == Constants.Document.Type.Company).ToList();
                 foreach (var item in companyNotams)
                 {
-                    notamsList.Add(CreateNotam(item, Constants.Document.Type.Company, item.Keys?.Airports?.Airport?.AirportICAOCode));
+                    notamsList.Add(CreateNotam(item, Constants.Document.Type.Company, item.Keys?.Airports?.Airport?.FirstOrDefault()?.AirportICAOCode));
                 }
             }
 
@@ -593,18 +600,23 @@ namespace ArincConverter.Services
             var sectionName = "";
             foreach (var notam in notams.NOTAMs?.NOTAM)
             {
-                if (sectionName != notam.OtherNotamInformation?.BriefingSection?.SectionName)
+                var newSectionName = GetSectionName(notam);
+                if (sectionName != newSectionName)
                 {
                     if (sectionName.IsNotNullOrEmpty())
                     {
-                        dict.Add(sectionName, notamList);
+                        if (dict.ContainsKey(sectionName))
+                            dict[sectionName].AddRange(notamList);
+                        else
+                            dict.Add(sectionName, notamList);
+
                         notamList = new List<string>();
                     }
 
-                    sectionName = notam.OtherNotamInformation?.BriefingSection?.SectionName;
+                    sectionName = newSectionName;
                 }
 
-                notamList.Add(notam.NOTAMText?.Paragraph?.Text);
+                notamList.Add($"{notam.Series}{notam.Serial}/{notam.Year} NOTAMN{Environment.NewLine}{notam.NOTAMText?.Paragraph?.Text}{Environment.NewLine}{Environment.NewLine}");
             }
             dict.Add(sectionName, notamList);
 
@@ -615,6 +627,31 @@ namespace ArincConverter.Services
                 ContentType = ContentType.Application.Pdf,
                 JourneyPart = Sabre.AlternateAirport.DepartureAirport
             };
+        }
+
+        private string GetSectionName(NOTAM notam)
+        {
+            var sectionName = notam.OtherNotamInformation?.BriefingSection?.SectionName;
+
+            var airports = notam.Keys?.Airports?.Airport;
+            if (airports?.Any() == true)
+            {
+                foreach (var airport in airports)
+                {
+                    sectionName += $"  {airport.AirportICAOCode} / {airport.AirportIATACode} {airport.AirportName}";
+                }
+            }
+
+            var airspaces = notam.Keys?.Airspaces?.Airspace;
+            if (airspaces?.Any() == true)
+            {
+                foreach (var airspace in airspaces)
+                {
+                    sectionName += $"\n{airspace.AirspaceICAOCode} {airspace.AirspaceName}";
+                }
+            }
+
+            return sectionName;
         }
 
         private FlightDocument GetWeatherDocument(List<ZipEntry> files)
@@ -703,8 +740,8 @@ namespace ArincConverter.Services
                             var previousRegion = i > 0 ? regionWeather.RegionWeathers?.RegionWeather[i - 1] : null;
                             var region = regionWeather.RegionWeathers?.RegionWeather[i];
 
-                            var previousIssuer = previousRegion?.Location?.Airspaces?.Airspace?.AirspaceICAOCode;
-                            var issuer = region?.Location?.Airspaces?.Airspace?.AirspaceICAOCode;
+                            var previousIssuer = previousRegion?.Location?.Airspaces?.Airspace?.FirstOrDefault()?.AirspaceICAOCode;
+                            var issuer = region?.Location?.Airspaces?.Airspace?.FirstOrDefault()?.AirspaceICAOCode;
                             var type = region?.Type;
                             var br = Environment.NewLine;
 

@@ -1942,7 +1942,7 @@ namespace ArincConverter.Models
     public class Airports
     {
         [XmlElement(ElementName = "Airport", Namespace = "http://aeec.aviation-ia.net/633")]
-        public Airport Airport { get; set; }
+        public List<Airport> Airport { get; set; }
     }
 
     [XmlRoot(ElementName = "Keys", Namespace = "http://aeec.aviation-ia.net/633")]
@@ -2164,7 +2164,7 @@ namespace ArincConverter.Models
     public class Airspaces
     {
         [XmlElement(ElementName = "Airspace", Namespace = "http://aeec.aviation-ia.net/633")]
-        public Airspace Airspace { get; set; }
+        public List<Airspace> Airspace { get; set; }
     }
 
     [XmlRoot(ElementName = "NOTAMs", Namespace = "http://aeec.aviation-ia.net/633")]

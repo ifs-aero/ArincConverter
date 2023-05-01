@@ -25,17 +25,19 @@ namespace ArincConverter.Services
 
             Console.WriteLine("\nPosting flight plan...");
             var response = await _efbApi.PostFlightPlan(new[] { flightPlan });
+
+            await using var stream = await response.Content.ReadAsStreamAsync();
+            using var reader = new StreamReader(stream);
+            var resp = await reader.ReadToEndAsync();
+
             if (response.IsSuccessStatusCode)
             {
-                await using var stream = await response.Content.ReadAsStreamAsync();
-                using var reader = new StreamReader(stream);
-                var resp = await reader.ReadToEndAsync();
                 var flightPlanId = Regex.Replace(resp, @"[^\d]", "");
                 return Convert.ToInt32(flightPlanId);
             }
             else
             {
-                throw new Exception($"Error while posting the flight plan. Status code: {response.StatusCode}");
+                throw new Exception($"Error while posting the flight plan.\nStatus code: {response.StatusCode}\nError: {resp}");
             }
         }
 
